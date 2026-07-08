@@ -46,7 +46,6 @@ TOGGLES = [
     ("Sound cues", "sounds"),
     ("Overlay indicator", "overlay"),
     ("Restore old clipboard after paste", "restore_clipboard"),
-    ("LLM cleanup via Ollama", "llm_enabled"),
 ]
 
 MODELS = [

@@ -28,7 +28,7 @@ from .config import (
 )
 from .context import current_context
 from .engine import create_engine
-from .formatter import format_transcript, llm_cleanup
+from .formatter import format_transcript
 from .hotkey import HotkeyListener, TapTracker
 from .inserter import copy_text, paste_text
 from .recorder import Recorder, duration_seconds, trim_silence
@@ -244,9 +244,6 @@ class LocalFlowApp:
                 self._overlay_flash("⚠️ Transcription failed — see log", 2.5)
                 return
             text = format_transcript(raw, self.config, ctx)
-            if (text and self.config.llm_enabled
-                    and len(text.split()) >= self.config.llm_min_words):
-                text = llm_cleanup(text, self.config, ctx)
             elapsed = time.perf_counter() - started
 
             if not text:

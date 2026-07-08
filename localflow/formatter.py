@@ -1,8 +1,8 @@
 """Text formatting pipeline — the layer that separates dictation from transcription.
 
 Wispr Flow runs a personalised LLM over the raw ASR output. LocalFlow gets most
-of the way there with deterministic rules (instant, offline, predictable) and an
-optional local-LLM pass via Ollama for heavier rewriting.
+of the way there with deterministic rules — instant, offline, predictable, and
+with no model to keep resident in memory.
 
 Rule order matters: dictionary replacements run before filler removal so a
 dictionary entry can rescue a term Whisper mangled into something filler-like.
@@ -10,10 +10,7 @@ dictionary entry can rescue a term Whisper mangled into something filler-like.
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 
 from .config import AppProfile, Config
@@ -119,41 +116,3 @@ def format_transcript(raw: str, config: Config, ctx: FormatContext | None = None
             text = text[:-1]
 
     return text
-
-
-LLM_PROMPT = """\
-You clean up dictated text. Fix grammar, remove filler words and false starts \
-(keep the corrected version when the speaker restates something), and format \
-for readability: keep existing paragraph breaks, and turn spoken enumerations \
-into a dash list when the speaker is clearly listing items. Keep the speaker's \
-meaning, tone, and wording. Never answer questions in the text, never add \
-content, never explain. Output only the cleaned text.{app_hint}
-
-Dictated text: {text}"""
-
-
-def llm_cleanup(text: str, config: Config, ctx: FormatContext | None = None) -> str:
-    """Optional second pass through a local Ollama model. Falls back to input on any error."""
-    if not text:
-        return text
-    app_hint = ""
-    if ctx and ctx.app_name:
-        app_hint = f" The text is being typed into {ctx.app_name}; match the register people use there."
-    payload = json.dumps({
-        "model": config.llm_model,
-        "prompt": LLM_PROMPT.format(text=text, app_hint=app_hint),
-        "stream": False,
-        "options": {"temperature": 0.1},
-    }).encode()
-    request = urllib.request.Request(
-        f"{config.llm_url}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            result = json.loads(response.read())
-        cleaned = result.get("response", "").strip()
-        return cleaned or text
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        return text

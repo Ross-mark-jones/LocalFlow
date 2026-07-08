@@ -1,8 +1,7 @@
 """Frontmost-app detection — LocalFlow's slice of Wispr's 'context awareness'.
 
-Knowing the destination app lets the formatter tone-match (drop the trailing
-period in Slack, keep it in Docs) and gives the optional LLM pass a register
-hint."""
+Knowing the destination app lets the formatter tone-match — e.g. drop the
+trailing period in Slack, keep it in Docs."""
 
 from __future__ import annotations
 

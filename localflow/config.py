@@ -46,13 +46,6 @@ overlay = true           # floating "Listening…" pill while recording
 # clipboard means a failed paste is one manual Cmd+V away.
 restore_clipboard = false
 
-[llm]
-# Optional second pass through a local LLM via Ollama for heavier cleanup.
-# Requires `brew install ollama` and a pulled model, e.g. `ollama pull qwen2.5:1.5b`.
-enabled = false
-model = "qwen2.5:1.5b"
-url = "http://localhost:11434"
-
 # Per-app tone profiles, keyed by bundle id. `casual = true` drops the trailing
 # period on single-sentence messages (Slack/iMessage style).
 [apps."com.tinyspeck.slackmacgap"]
@@ -90,18 +83,12 @@ class Config:
     # paste handlers, and keeping the transcript on the clipboard means a
     # failed paste is always recoverable with Cmd+V.
     restore_clipboard: bool = False
-    llm_enabled: bool = False
-    llm_model: str = "qwen2.5:1.5b"
-    llm_url: str = "http://localhost:11434"
-    # Only send longer dictations through the LLM: short ones don't need it
-    # and shouldn't pay the extra second of latency.
-    llm_min_words: int = 12
     app_profiles: dict[str, AppProfile] = field(default_factory=dict)
     dictionary: dict[str, str] = field(default_factory=dict)
 
 # Keys the menu-bar UI may persist to settings.json.
 TOGGLEABLE = ("remove_fillers", "spoken_commands", "capitalize", "sounds",
-              "overlay", "restore_clipboard", "llm_enabled", "model", "hotkey")
+              "overlay", "restore_clipboard", "model", "hotkey")
 
 
 def ensure_config_files() -> None:
@@ -167,11 +154,6 @@ def load_config() -> Config:
     cfg.remove_fillers = fmt.get("remove_fillers", cfg.remove_fillers)
     cfg.spoken_commands = fmt.get("spoken_commands", cfg.spoken_commands)
     cfg.capitalize = fmt.get("capitalize", cfg.capitalize)
-    llm = raw.get("llm", {})
-    cfg.llm_enabled = llm.get("enabled", cfg.llm_enabled)
-    cfg.llm_model = llm.get("model", cfg.llm_model)
-    cfg.llm_url = llm.get("url", cfg.llm_url)
-    cfg.llm_min_words = llm.get("min_words", cfg.llm_min_words)
     fmt2 = raw.get("ui", {})
     cfg.sounds = fmt2.get("sounds", cfg.sounds)
     cfg.overlay = fmt2.get("overlay", cfg.overlay)

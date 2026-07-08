@@ -40,7 +40,7 @@ That's it. Look for the **🎙 in your menu bar**. The first launch downloads th
 
 ## How it works
 
-Wispr Flow-style pipeline, entirely on-device: a Quartz event tap watches the `fn` key → mic audio (16 kHz) → [Parakeet TDT](https://huggingface.co/mlx-community/parakeet-tdt_ctc-110m) speech recognition via MLX on the Apple Silicon GPU → a rules formatter (fillers, hallucination filter, personal dictionary, per-app tone — casual in Slack/iMessage, formal elsewhere) → clipboard paste into the frontmost app. An optional [Ollama](https://ollama.com) pass adds LLM-grade cleanup if you want it.
+Wispr Flow-style pipeline, entirely on-device: a Quartz event tap watches the `fn` key → mic audio (16 kHz) → [Parakeet TDT](https://huggingface.co/mlx-community/parakeet-tdt_ctc-110m) speech recognition via MLX on the Apple Silicon GPU → a rules formatter (fillers, spoken punctuation, pause-based paragraphs, personal dictionary, per-app tone — casual in Slack/iMessage, formal elsewhere) → clipboard paste into the frontmost app.
 
 ## Development
 
