@@ -24,6 +24,13 @@ KEY_V = 9  # kVK_ANSI_V
 RESTORE_DELAY = 2.0  # seconds; generous so even slow paste handlers have read us
 
 
+def copy_text(text: str) -> None:
+    """Put text on the clipboard without synthesising a paste."""
+    pasteboard = NSPasteboard.generalPasteboard()
+    pasteboard.clearContents()
+    pasteboard.setString_forType_(text, NSPasteboardTypeString)
+
+
 def paste_text(text: str, restore_clipboard: bool = False) -> None:
     if not text:
         return

@@ -16,7 +16,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import login, sounds, ui
+from . import history, login, sounds, ui
 from .config import (
     CONFIG_FILE,
     DICTIONARY_FILE,
@@ -29,7 +29,7 @@ from .context import current_context
 from .engine import create_engine
 from .formatter import format_transcript, llm_cleanup
 from .hotkey import HotkeyListener
-from .inserter import paste_text
+from .inserter import copy_text, paste_text
 from .recorder import Recorder, duration_seconds, trim_silence
 
 MIN_UTTERANCE_SECONDS = 0.3
@@ -178,13 +178,18 @@ class LocalFlowApp:
                          elapsed, duration_seconds(audio), held)
                 return
 
-            ui.call_on_main(self._paste_and_report, text, ctx.app_name or "app", elapsed)
+            ui.call_on_main(self._paste_and_report, text, raw, ctx,
+                            duration_seconds(audio), elapsed)
 
     # -- main-thread finish -------------------------------------------------
 
-    def _paste_and_report(self, text: str, target: str, elapsed: float) -> None:
+    def _paste_and_report(self, text, raw, ctx, audio_seconds: float, elapsed: float) -> None:
+        target = ctx.app_name or "app"
         paste_text(text, self.config.restore_clipboard)
+        history.add(text, raw_text=raw, app_name=ctx.app_name, bundle_id=ctx.bundle_id,
+                    audio_seconds=audio_seconds, elapsed_seconds=elapsed)
         self.status_bar.set_last(text)
+        self.status_bar.refresh_history(history.recent(10))
         self.status_bar.set_icon(ui.ICON_IDLE)
         if self.config.overlay:
             self.overlay.flash(f"✓ Pasted into {target} — also on clipboard", 1.8)
@@ -224,6 +229,19 @@ class LocalFlowApp:
         self.status_bar.sync()
         self._status(f"Ready · {self._model_short_name()} · hold [{key}]")
         log.info("hotkey switched to %s", key)
+
+    def on_history_copy(self, text: str) -> None:
+        copy_text(text)
+        if self.config.overlay:
+            self.overlay.flash("✓ Copied to clipboard", 1.2)
+
+    def on_open_library(self) -> None:
+        ui.open_in_default_app(str(history.render_library()))
+
+    def on_clear_history(self) -> None:
+        history.clear()
+        self.status_bar.refresh_history([])
+        log.info("history cleared")
 
     def on_open_config(self) -> None:
         ui.open_in_default_app(str(CONFIG_FILE))
@@ -276,6 +294,7 @@ class LocalFlowApp:
             sys.exit(0)
         ui.setup_nsapp()
         self.status_bar = ui.StatusBarUI(self)
+        self.status_bar.refresh_history(history.recent(10))
         self.overlay = ui.Overlay()
         self._connect_hotkey()
         threading.Thread(target=self._load_model, daemon=True).start()

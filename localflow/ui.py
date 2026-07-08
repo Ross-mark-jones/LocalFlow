@@ -80,6 +80,15 @@ class _MenuTarget(NSObject):
     def onLogin_(self, sender):
         self.controller.on_login_toggle()
 
+    def onHistoryCopy_(self, sender):
+        self.controller.on_history_copy(str(sender.representedObject()))
+
+    def onOpenLibrary_(self, sender):
+        self.controller.on_open_library()
+
+    def onClearHistory_(self, sender):
+        self.controller.on_clear_history()
+
     def onOpenConfig_(self, sender):
         self.controller.on_open_config()
 
@@ -176,6 +185,12 @@ class StatusBarUI:
 
         self.status_line = self._info_item(menu, "Starting…")
         self.last_line = self._info_item(menu, "Last: —")
+
+        history_parent = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("History", None, "")
+        self._history_menu = NSMenu.alloc().init()
+        self._history_menu.setAutoenablesItems_(False)
+        history_parent.setSubmenu_(self._history_menu)
+        menu.addItem_(history_parent)
         menu.addItem_(NSMenuItem.separatorItem())
 
         for title, key in TOGGLES:
@@ -236,6 +251,37 @@ class StatusBarUI:
         if len(short) > 60:
             short = short[:57] + "…"
         self.last_line.setTitle_(f"Last: {short}")
+
+    def refresh_history(self, entries: list[dict]) -> None:
+        """Rebuild the History submenu: recent dictations (click = copy),
+        then Library/Clear actions. Main thread only."""
+        import time as _time
+
+        self._history_menu.removeAllItems_()
+        if not entries:
+            placeholder = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "No dictations yet", None, "")
+            placeholder.setEnabled_(False)
+            self._history_menu.addItem_(placeholder)
+        for entry in entries:
+            stamp = _time.strftime("%H:%M", _time.localtime(entry["ts"]))
+            text = entry["text"].replace("\n", " ")
+            title = f"{stamp}  {text[:52]}{'…' if len(text) > 52 else ''}"
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, "onHistoryCopy:", "")
+            item.setTarget_(self._target)
+            item.setRepresentedObject_(entry["text"])
+            item.setToolTip_(entry["text"])
+            self._history_menu.addItem_(item)
+        self._history_menu.addItem_(NSMenuItem.separatorItem())
+        library = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Open Library…", "onOpenLibrary:", "")
+        library.setTarget_(self._target)
+        self._history_menu.addItem_(library)
+        clear = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Clear History", "onClearHistory:", "")
+        clear.setTarget_(self._target)
+        self._history_menu.addItem_(clear)
 
     def sync(self) -> None:
         """Reflect current config in every checkmark."""

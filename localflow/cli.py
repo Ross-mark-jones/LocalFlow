@@ -29,6 +29,8 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser("run", help="Run the dictation app (default)")
     subparsers.add_parser("doctor", help="Check permissions and settings")
+    history_cmd = subparsers.add_parser("history", help="Show recent dictations")
+    history_cmd.add_argument("-n", type=int, default=20, help="How many to show")
     transcribe = subparsers.add_parser("transcribe", help="Transcribe an audio file and print the result")
     transcribe.add_argument("file")
     transcribe.add_argument("--raw", action="store_true", help="Skip the formatting pipeline")
@@ -46,6 +48,16 @@ def main() -> None:
         from .doctor import run_doctor
 
         run_doctor(config.hotkey)
+        return
+
+    if args.command == "history":
+        import time
+
+        from . import history
+
+        for entry in history.recent(args.n):
+            stamp = time.strftime("%d %b %H:%M", time.localtime(entry["ts"]))
+            print(f"{stamp} · {entry['app_name'] or '?':<12} {entry['text']}")
         return
 
     if args.command == "transcribe":
