@@ -80,6 +80,9 @@ class _MenuTarget(NSObject):
     def onLogin_(self, sender):
         self.controller.on_login_toggle()
 
+    def onCancelRecording_(self, sender):
+        self.controller.on_cancel_recording()
+
     def onHistoryCopy_(self, sender):
         self.controller.on_history_copy(str(sender.representedObject()))
 
@@ -191,6 +194,7 @@ class StatusBarUI:
         self._history_menu.setAutoenablesItems_(False)
         history_parent.setSubmenu_(self._history_menu)
         menu.addItem_(history_parent)
+        self._action_item(menu, "Cancel recording (or press Esc)", "onCancelRecording:", "")
         menu.addItem_(NSMenuItem.separatorItem())
 
         for title, key in TOGGLES:
