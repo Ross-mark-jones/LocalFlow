@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import login, sounds, ui
 from .config import (
@@ -55,6 +56,10 @@ class LocalFlowApp:
         )
         self._transcribe_lock = threading.Lock()
         self._model_ready = threading.Event()
+        # MLX streams are thread-bound (parakeet-mlx raises "no Stream in
+        # current thread" if load and inference happen on different threads),
+        # so every engine call runs on this single dedicated thread.
+        self._engine_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="engine")
         self.status_bar: ui.StatusBarUI | None = None
         self.overlay: ui.Overlay | None = None
 
@@ -93,7 +98,7 @@ class LocalFlowApp:
         self._icon(ui.ICON_BUSY)
         started = time.perf_counter()
         try:
-            self.engine.load()
+            self._engine_thread.submit(self.engine.load).result()
         except Exception:
             log.exception("model load failed")
             self._status(f"Model failed to load — see {LOG_FILE.name}")
@@ -155,7 +160,7 @@ class LocalFlowApp:
             self.config.dictionary = load_dictionary()  # live-reload user edits
             ctx = current_context(self.config)
             try:
-                raw = self.engine.transcribe(audio)
+                raw = self._engine_thread.submit(self.engine.transcribe, audio).result()
             except Exception:
                 log.exception("transcription failed")
                 self._icon(ui.ICON_ERROR)
