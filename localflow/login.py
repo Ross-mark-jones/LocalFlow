@@ -9,7 +9,7 @@ from pathlib import Path
 
 LABEL = "nz.somethingnew.localflow"
 AGENT_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
-APP_PATH = Path.home() / "Applications" / "LocalFlow.app"
+APP_PATH = Path("/Applications/LocalFlow.app")
 
 
 def enabled() -> bool:

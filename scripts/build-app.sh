@@ -9,9 +9,10 @@ set -e
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="$HOME/.localflow/venv"
-APP="$HOME/Applications/LocalFlow.app"
+# /Applications: it's where the Privacy & Security file picker, Spotlight,
+# and users expect apps to live.
+APP="/Applications/LocalFlow.app"
 
-mkdir -p "$HOME/Applications"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
