@@ -15,7 +15,7 @@ Requires the hosting app (your terminal) to have Accessibility permission.
 
 from __future__ import annotations
 
-import threading
+import time
 from typing import Callable
 
 import Quartz
@@ -94,27 +94,21 @@ class TapTracker:
 
 
 class HotkeyListener:
-    """Fires on_press when the chosen key goes down, on_release when it comes
-    up, and on_cancel if another key is struck mid-hold.
+    """Emits ordered keyboard events: on_event(kind, timestamp) with kind in
+    {"press", "release", "cancel", "esc"}.
+
+    on_event is called synchronously on the tap's run-loop thread and MUST be
+    fast (enqueue and return). Events used to spawn a thread each, but rapid
+    double-taps then raced each other and corrupted the tap state machine —
+    strict ordering is the whole point of this interface.
 
     install() adds the tap to the *current* run loop (works under both a bare
-    CFRunLoop and an AppKit event loop). Callbacks run on short-lived worker
-    threads; do UI updates via AppHelper.callAfter.
+    CFRunLoop and an AppKit event loop).
     """
 
-    def __init__(
-        self,
-        key: str,
-        on_press: Callable[[], None],
-        on_release: Callable[[], None],
-        on_cancel: Callable[[], None] | None = None,
-        on_esc: Callable[[], None] | None = None,
-    ):
+    def __init__(self, key: str, on_event: Callable[[str, float], None]):
         self.set_key(key)
-        self.on_press = on_press
-        self.on_release = on_release
-        self.on_cancel = on_cancel
-        self.on_esc = on_esc
+        self.on_event = on_event
         self._down = False
         self._tap = None
 
@@ -134,16 +128,18 @@ class HotkeyListener:
             Quartz.CGEventTapEnable(self._tap, True)
             return event
 
+        now = time.monotonic()
+
         if event_type == Quartz.kCGEventKeyDown:
-            if self._down and self.on_cancel is not None:
+            if self._down:
                 # fn+key combo — user wanted a shortcut, not a dictation.
                 self._down = False
-                threading.Thread(target=self.on_cancel, daemon=True).start()
-            elif self.on_esc is not None:
+                self.on_event("cancel", now)
+            else:
                 keycode = Quartz.CGEventGetIntegerValueField(
                     event, Quartz.kCGKeyboardEventKeycode)
                 if keycode == KVK_ESCAPE:
-                    threading.Thread(target=self.on_esc, daemon=True).start()
+                    self.on_event("esc", now)
             return event
 
         if event_type != Quartz.kCGEventFlagsChanged:
@@ -157,10 +153,10 @@ class HotkeyListener:
         pressed = bool(flags & self.flag_mask)
         if pressed and not self._down:
             self._down = True
-            threading.Thread(target=self.on_press, daemon=True).start()
+            self.on_event("press", now)
         elif not pressed and self._down:
             self._down = False
-            threading.Thread(target=self.on_release, daemon=True).start()
+            self.on_event("release", now)
         return event
 
     def install(self) -> None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import sys
 import threading
 import time
@@ -52,9 +53,11 @@ class LocalFlowApp:
         self.config = config
         self.engine = create_engine(config.model, config.language)
         self.recorder = Recorder()
-        self.listener = HotkeyListener(
-            config.hotkey, self._on_press, self._on_release, self._on_cancel, self._on_esc
-        )
+        # All hotkey/menu/watchdog events flow through one queue and are
+        # handled strictly in order on a single dispatcher thread — per-event
+        # threads raced each other on fast double-taps.
+        self._events: "queue.Queue[tuple[str, float]]" = queue.Queue()
+        self.listener = HotkeyListener(config.hotkey, self._enqueue_event)
         self.tap_tracker = TapTracker()
         self._transcribe_lock = threading.Lock()
         self._model_ready = threading.Event()
@@ -113,45 +116,62 @@ class LocalFlowApp:
 
     # -- hotkey callbacks (worker threads) ---------------------------------
 
-    def _on_press(self) -> None:
-        if not self._model_ready.is_set():
-            self._overlay_flash("⏳ Model still loading…")
-            self._cue(sounds.error_cue)
+    def _enqueue_event(self, kind: str, ts: float) -> None:
+        self._events.put((kind, ts))
+
+    def _event_loop(self) -> None:
+        while True:
+            kind, ts = self._events.get()
+            try:
+                self._handle_event(kind, ts)
+            except Exception:
+                log.exception("event %s failed", kind)
+
+    def _handle_event(self, kind: str, ts: float) -> None:
+        if kind == "cancel":  # another key struck mid-hold: user wanted fn+<key>
+            self._abort_recording("cancelled by key combo")
             return
-        action = self.tap_tracker.press(time.monotonic())
-        if action == "finish":  # tap ends a hands-free recording
-            log.info("hands-free recording finished by tap")
+        if kind == "esc" or kind == "menu-cancel":
+            if self.recorder.recording:
+                reason = "cancelled by Esc" if kind == "esc" else "cancelled from menu"
+                self._abort_recording(reason)
+            return
+        if kind == "force-finish":  # watchdog: recording ran absurdly long
+            if self.recorder.recording:
+                self.tap_tracker.cancel()
+                self._finish_recording()
+            return
+        if kind == "press":
+            if not self._model_ready.is_set():
+                self._overlay_flash("⏳ Model still loading…")
+                self._cue(sounds.error_cue)
+                return
+            action = self.tap_tracker.press(ts)
+            if action == "finish":  # tap ends a hands-free recording
+                log.info("hands-free recording finished by tap")
+                self._finish_recording()
+                return
+            self.recorder.start()
+            log.info("recording started")
+            self._cue(sounds.start_cue)
+            self._icon(ui.ICON_RECORDING)
+            self._overlay_show("● Listening…")
+            return
+        if kind == "release":
+            action = self.tap_tracker.release(ts)
+            if action == "none":
+                return
+            if action == "lock":  # double-tap → hands-free
+                log.info("hands-free recording (double-tap) — tap fn to finish")
+                self._overlay_show("● Recording — tap fn to finish · Esc cancels")
+                return
+            if action == "discard":  # lone short tap
+                self.recorder.stop()
+                self._icon(ui.ICON_IDLE)
+                if self.overlay:
+                    ui.call_on_main(self.overlay.hide)
+                return
             self._finish_recording()
-            return
-        self.recorder.start()
-        log.info("recording started")
-        self._cue(sounds.start_cue)
-        self._icon(ui.ICON_RECORDING)
-        self._overlay_show("● Listening…")
-
-    def _on_release(self) -> None:
-        action = self.tap_tracker.release(time.monotonic())
-        if action == "none":
-            return
-        if action == "lock":  # double-tap → hands-free
-            log.info("hands-free recording (double-tap) — tap fn to finish")
-            self._overlay_show("● Recording — tap fn to finish · Esc cancels")
-            return
-        if action == "discard":  # lone short tap
-            self.recorder.stop()
-            self._icon(ui.ICON_IDLE)
-            if self.overlay:
-                ui.call_on_main(self.overlay.hide)
-            return
-        self._finish_recording()
-
-    def _on_cancel(self) -> None:
-        # Another key was struck mid-hold: the user wanted fn+<key>, not us.
-        self._abort_recording("cancelled by key combo")
-
-    def _on_esc(self) -> None:
-        if self.recorder.recording:
-            self._abort_recording("cancelled by Esc")
 
     def _abort_recording(self, reason: str) -> None:
         self.tap_tracker.cancel()
@@ -162,7 +182,7 @@ class LocalFlowApp:
             log.info("recording %s", reason)
 
     def on_cancel_recording(self) -> None:  # menu action — works even if the tap is dead
-        self._abort_recording("cancelled from menu")
+        self._enqueue_event("menu-cancel", time.monotonic())
 
     def _watchdog(self) -> None:
         """Belt and braces against the stuck-Listening failure: macOS disables
@@ -177,15 +197,19 @@ class LocalFlowApp:
                 if (self.recorder.recording and started is not None
                         and time.monotonic() - started > MAX_RECORDING_SECONDS):
                     log.warning("recording exceeded %ss — auto-finishing", MAX_RECORDING_SECONDS)
-                    self.tap_tracker.cancel()
-                    self._finish_recording()
+                    self._enqueue_event("force-finish", time.monotonic())
             except Exception:
                 log.exception("watchdog error")
 
     def _finish_recording(self) -> None:
+        """Dispatcher thread: stop capture fast, hand the slow work off so the
+        event queue stays responsive during transcription."""
         audio = self.recorder.stop()
         log.info("recording stopped (%.1fs)", duration_seconds(audio))
         self._cue(sounds.stop_cue)
+        threading.Thread(target=self._process_audio, args=(audio,), daemon=True).start()
+
+    def _process_audio(self, audio) -> None:
         if duration_seconds(audio) < MIN_UTTERANCE_SECONDS:
             self._icon(ui.ICON_IDLE)
             if self.overlay:
@@ -349,6 +373,7 @@ class LocalFlowApp:
         self.status_bar.refresh_history(history.recent(10))
         self.overlay = ui.Overlay()
         self._connect_hotkey()
+        threading.Thread(target=self._event_loop, daemon=True).start()
         threading.Thread(target=self._watchdog, daemon=True).start()
         threading.Thread(target=self._load_model, daemon=True).start()
         print("LocalFlow is in your menu bar (🎙). Logs:", LOG_FILE)
