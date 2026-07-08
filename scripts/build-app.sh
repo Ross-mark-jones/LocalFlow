@@ -36,15 +36,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$APP/Contents/MacOS/LocalFlow" <<SH
-#!/bin/sh
-export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
-"\$HOME/.localflow/venv/bin/localflow" "\$@" &
-PID=\$!
-trap 'kill -TERM \$PID 2>/dev/null' TERM INT
-wait \$PID
-SH
-chmod +x "$APP/Contents/MacOS/LocalFlow"
+# Native launcher: a script here would run under /bin/sh and break TCC
+# attribution (see scripts/launcher.c).
+clang -O2 -o "$APP/Contents/MacOS/LocalFlow" "$REPO/scripts/launcher.c"
 
 # Icon is nice-to-have; never fail the build over it.
 "$VENV/bin/python" "$REPO/scripts/make-icon.py" "$APP/Contents/Resources" || \
