@@ -26,10 +26,10 @@ DEFAULT_CONFIG = """\
 key = "fn"
 
 [asr]
-# Any mlx-community Whisper repo. small.en is the sweet spot on 8-16 GB
-# machines; large-v3-turbo is more accurate but needs 16 GB+ to run without
-# swapping (which makes it *slower*, not better, on small machines).
-model = "mlx-community/whisper-small.en-mlx"
+# Parakeet 110M: sub-second transcription with above-whisper-small accuracy
+# at ~250 MB — the right default for 8-16 GB Macs. Whisper repos also work
+# (e.g. mlx-community/whisper-large-v3-turbo on 16 GB+ machines).
+model = "mlx-community/parakeet-tdt_ctc-110m"
 # Force a language code (e.g. "en") or leave empty to auto-detect.
 language = "en"
 
@@ -79,7 +79,7 @@ class AppProfile:
 @dataclass
 class Config:
     hotkey: str = "fn"
-    model: str = "mlx-community/whisper-small.en-mlx"
+    model: str = "mlx-community/parakeet-tdt_ctc-110m"
     language: str | None = "en"
     remove_fillers: bool = True
     spoken_commands: bool = True

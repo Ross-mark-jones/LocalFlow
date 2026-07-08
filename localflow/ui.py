@@ -50,9 +50,11 @@ TOGGLES = [
 ]
 
 MODELS = [
-    ("Small English — recommended (8–16 GB Macs)", "mlx-community/whisper-small.en-mlx"),
-    ("Base English — fastest usable", "mlx-community/whisper-base.en-mlx"),
-    ("Large v3 Turbo — most accurate (16 GB+ only)", "mlx-community/whisper-large-v3-turbo"),
+    ("Parakeet 110M — fast + accurate (recommended)", "mlx-community/parakeet-tdt_ctc-110m"),
+    ("Parakeet 0.6B — max accuracy, still quick", "mlx-community/parakeet-tdt-0.6b-v2"),
+    ("Whisper Base.en — light fallback", "mlx-community/whisper-base.en-mlx"),
+    ("Whisper Small.en", "mlx-community/whisper-small.en-mlx"),
+    ("Whisper Large v3 Turbo — 16 GB+ Macs", "mlx-community/whisper-large-v3-turbo"),
 ]
 
 HOTKEYS = [
@@ -74,6 +76,9 @@ class _MenuTarget(NSObject):
 
     def onHotkey_(self, sender):
         self.controller.on_hotkey(str(sender.representedObject()))
+
+    def onLogin_(self, sender):
+        self.controller.on_login_toggle()
 
     def onOpenConfig_(self, sender):
         self.controller.on_open_config()
@@ -182,6 +187,8 @@ class StatusBarUI:
         self._submenu(menu, "Hold-to-talk key", HOTKEYS, "onHotkey:", self._hotkey_items)
         menu.addItem_(NSMenuItem.separatorItem())
 
+        self._login_item = self._action_item(menu, "Start at login", "onLogin:", "")
+
         self._action_item(menu, "Open config file", "onOpenConfig:", "")
         self._action_item(menu, "Open personal dictionary", "onOpenDictionary:", "")
         menu.addItem_(NSMenuItem.separatorItem())
@@ -239,6 +246,8 @@ class StatusBarUI:
             entry.setState_(1 if value == config.model else 0)
         for value, entry in self._hotkey_items.items():
             entry.setState_(1 if value == config.hotkey else 0)
+        if hasattr(self.controller, "login_enabled"):
+            self._login_item.setState_(1 if self.controller.login_enabled() else 0)
 
 
 def open_in_default_app(path: str) -> None:

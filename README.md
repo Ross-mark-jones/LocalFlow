@@ -4,32 +4,36 @@ A local, private Wispr Flow clone for macOS. Hold `fn`, speak, release — forma
 
 ## Quick start
 
+Open **LocalFlow** from `~/Applications` (or Spotlight). It lives in the menu bar as 🎙 — no Dock icon, no window. Click the icon for all settings; enable **Start at login** there to make it permanent.
+
+Default engine is **Parakeet 110M**: sub-second transcription on an M1 with accuracy above whisper-small at ~250 MB of memory.
+
+### Development
+
 ```bash
-cd LocalFlow
-uv sync                # one-time install
-uv run localflow doctor    # check permissions (see below)
-uv run localflow           # run it — hold fn and speak
+cd ~/Apps/LocalFlow            # repo lives OUTSIDE iCloud on purpose
+./start.sh                     # run from source (env in ~/.localflow/venv)
+./scripts/build-app.sh         # rebuild ~/Applications/LocalFlow.app
+UV_PROJECT_ENVIRONMENT=~/.localflow/venv uv run python -m pytest
 ```
 
-First run downloads the ASR model (~1.6 GB for the default `whisper-large-v3-turbo`) and warms it up. After that, dictations transcribe in well under a second.
+Note: after `build-app.sh`, macOS may treat the rebuilt bundle as a new app and re-ask for Accessibility once.
 
 ## One-time macOS setup
 
-`localflow doctor` checks all of these:
+1. **Accessibility** — on first launch the app prompts and waits; enable **LocalFlow** in System Settings → Privacy & Security → Accessibility and it connects automatically.
+2. **Microphone** — macOS prompts on first dictation; approve it.
+3. **Globe key** — System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing** (`./start.sh doctor` checks this).
 
-1. **Accessibility** — System Settings → Privacy & Security → Accessibility → enable your terminal app (needed for the global hotkey and pasting).
-2. **Microphone** — macOS prompts on first recording; approve it.
-3. **Globe key** — System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing** (otherwise the emoji picker fights with hold-to-talk).
-
-## Usage
+## CLI (from the repo)
 
 | Command | What it does |
 |---|---|
-| `uv run localflow` | Run the dictation app (hold `fn`, speak, release) |
-| `uv run localflow doctor` | Check permissions and keyboard settings |
-| `uv run localflow transcribe file.wav` | Test the pipeline on an audio file, no mic needed |
-| `uv run localflow --model mlx-community/whisper-base.en` | Use a smaller/faster model |
-| `uv run localflow --key right_cmd` | Use a different hold key |
+| `./start.sh` | Run the menu-bar app from source |
+| `./start.sh doctor` | Check permissions and keyboard settings |
+| `./start.sh transcribe file.wav` | Test the pipeline on an audio file, no mic needed |
+| `./start.sh --model mlx-community/whisper-base.en-mlx` | Try a different model |
+| `./start.sh --key right_cmd` | Use a different hold key |
 
 ## Configuration
 

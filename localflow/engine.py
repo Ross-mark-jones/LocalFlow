@@ -1,16 +1,71 @@
-"""ASR engines. MLX Whisper is the default; the Engine protocol keeps the door
-open for Parakeet (via parakeet-mlx) or whisper.cpp without touching callers."""
+"""ASR engines, selected by model name via create_engine().
+
+Parakeet (NVIDIA's TDT architecture, via parakeet-mlx) is the default: on an
+M1 it transcribes 10s of speech in well under a second with accuracy above
+whisper-small, at ~250 MB resident for the 110M variant. MLX Whisper remains
+for multilingual/turbo use.
+"""
 
 from __future__ import annotations
 
+import os
+import tempfile
+import wave
 from typing import Protocol
 
 import numpy as np
+
+SAMPLE_RATE = 16_000
 
 
 class Engine(Protocol):
     def load(self) -> None: ...
     def transcribe(self, audio: "np.ndarray | str") -> str: ...
+
+
+def create_engine(model: str, language: str | None = None) -> "Engine":
+    if "parakeet" in model.lower():
+        return ParakeetEngine(model)
+    return MLXWhisperEngine(model, language)
+
+
+def _to_wav_file(audio: np.ndarray) -> str:
+    """Parakeet's transcribe() only accepts paths, so bridge arrays through a
+    temp WAV (16-bit PCM). Milliseconds of overhead, deleted by the caller."""
+    fd, path = tempfile.mkstemp(suffix=".wav", prefix="localflow_")
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+    with os.fdopen(fd, "wb") as raw, wave.open(raw, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm.tobytes())
+    return path
+
+
+class ParakeetEngine:
+    """Parakeet TDT on Apple Silicon via parakeet-mlx."""
+
+    def __init__(self, model: str):
+        self.model = model
+        self._pk = None
+
+    def load(self) -> None:
+        from parakeet_mlx import from_pretrained  # deferred import
+
+        self._pk = from_pretrained(self.model)
+        # Warm-up compiles the Metal kernels so the first dictation is fast.
+        self.transcribe(np.zeros(int(0.5 * SAMPLE_RATE), dtype=np.float32))
+
+    def transcribe(self, audio: "np.ndarray | str") -> str:
+        if self._pk is None:
+            self.load()
+        if isinstance(audio, str):
+            return self._pk.transcribe(audio).text.strip()
+        path = _to_wav_file(audio)
+        try:
+            return self._pk.transcribe(path).text.strip()
+        finally:
+            os.unlink(path)
 
 
 class MLXWhisperEngine:
@@ -22,11 +77,9 @@ class MLXWhisperEngine:
         self.language = language
 
     def load(self) -> None:
-        """Warm up: transcribing a beat of silence forces the model download and
-        Metal kernel compilation so the first real dictation isn't slow."""
         import mlx_whisper  # deferred: ~2s import cost
 
-        silence = np.zeros(int(0.5 * 16_000), dtype=np.float32)
+        silence = np.zeros(int(0.5 * SAMPLE_RATE), dtype=np.float32)
         mlx_whisper.transcribe(silence, path_or_hf_repo=self.model, language=self.language)
 
     def transcribe(self, audio: "np.ndarray | str") -> str:

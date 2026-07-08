@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 
-from . import sounds, ui
+from . import login, sounds, ui
 from .config import (
     CONFIG_FILE,
     DICTIONARY_FILE,
@@ -24,7 +24,7 @@ from .config import (
     save_setting,
 )
 from .context import current_context
-from .engine import MLXWhisperEngine
+from .engine import create_engine
 from .formatter import format_transcript, llm_cleanup
 from .hotkey import HotkeyListener
 from .inserter import paste_text
@@ -47,7 +47,7 @@ def _setup_logging() -> None:
 class LocalFlowApp:
     def __init__(self, config: Config):
         self.config = config
-        self.engine = MLXWhisperEngine(config.model, config.language)
+        self.engine = create_engine(config.model, config.language)
         self.recorder = Recorder()
         self.listener = HotkeyListener(
             config.hotkey, self._on_press, self._on_release, self._on_cancel
@@ -193,10 +193,18 @@ class LocalFlowApp:
             return
         self.config.model = repo
         save_setting("model", repo)
-        self.engine = MLXWhisperEngine(repo, self.config.language)
+        self.engine = create_engine(repo, self.config.language)
         self._model_ready.clear()
         self.status_bar.sync()
         threading.Thread(target=self._load_model, daemon=True).start()
+
+    def login_enabled(self) -> bool:
+        return login.enabled()
+
+    def on_login_toggle(self) -> None:
+        state = login.toggle()
+        self.status_bar.sync()
+        log.info("start at login: %s", state)
 
     def on_hotkey(self, key: str) -> None:
         self.listener.set_key(key)
@@ -214,17 +222,60 @@ class LocalFlowApp:
 
     # -- entry ----------------------------------------------------------------
 
+    def _wait_for_accessibility(self) -> None:
+        from .doctor import check_accessibility
+
+        while not check_accessibility():
+            time.sleep(2)
+        ui.call_on_main(self._connect_hotkey)
+
+    def _connect_hotkey(self) -> None:
+        """Main thread: install the tap now, or park in a wait loop until the
+        user grants Accessibility (first launch of the .app)."""
+        try:
+            self.listener.install()
+        except PermissionError:
+            from .doctor import check_accessibility
+
+            check_accessibility(prompt=True)  # pops the system dialog
+            log.warning("waiting for Accessibility grant")
+            self._icon(ui.ICON_ERROR)
+            self._status("Enable LocalFlow in Accessibility settings…")
+            self._overlay_flash("Grant Accessibility to LocalFlow — I'll connect automatically", 6.0)
+            threading.Thread(target=self._wait_for_accessibility, daemon=True).start()
+            return
+        log.info("hotkey listener connected (%s)", self.config.hotkey)
+        if self._model_ready.is_set():
+            self._icon(ui.ICON_IDLE)
+            self._status(f"Ready · {self._model_short_name()} · hold [{self.config.hotkey}]")
+
     def run(self) -> None:
         _setup_logging()
+        if not _acquire_single_instance_lock():
+            print("LocalFlow is already running (check the 🎙 in your menu bar).")
+            sys.exit(0)
         ui.setup_nsapp()
         self.status_bar = ui.StatusBarUI(self)
         self.overlay = ui.Overlay()
-        try:
-            self.listener.install()
-        except PermissionError as error:
-            log.error("%s", error)
-            print(f"\n{error}", file=sys.stderr)
-            sys.exit(1)
+        self._connect_hotkey()
         threading.Thread(target=self._load_model, daemon=True).start()
         print("LocalFlow is in your menu bar (🎙). Logs:", LOG_FILE)
         ui.run_event_loop()
+
+
+_lock_handle = None  # keeps the fd (and the flock) alive for the process lifetime
+
+
+def _acquire_single_instance_lock() -> bool:
+    """One instance only — a login item plus a manual launch would otherwise
+    both tap the keyboard and paste twice."""
+    global _lock_handle
+    import fcntl
+
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _lock_handle = open(LOG_FILE.parent / "instance.lock", "w")
+    try:
+        fcntl.flock(_lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False

@@ -37,10 +37,10 @@ def main() -> None:
         return
 
     if args.command == "transcribe":
-        from .engine import MLXWhisperEngine
+        from .engine import create_engine
         from .formatter import format_transcript
 
-        engine = MLXWhisperEngine(config.model, config.language)
+        engine = create_engine(config.model, config.language)
         raw = engine.transcribe(args.file)
         print(raw if args.raw else format_transcript(raw, config))
         return
