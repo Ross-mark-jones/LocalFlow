@@ -1,18 +1,28 @@
-"""LocalFlow runtime: wires hotkey → recorder → ASR → formatter → paste.
+"""LocalFlow runtime: menu-bar app wiring hotkey → recorder → ASR → formatter → paste.
 
-Threading model: the CFRunLoop (hotkey tap) owns the main thread. Press/release
-callbacks arrive on short-lived worker threads; transcription work is serialised
-by a lock so a rapid second dictation queues instead of interleaving pastes.
+Threading model: AppKit's event loop owns the main thread (status item, overlay,
+and the CGEventTap source all live there). Hotkey callbacks arrive on worker
+threads; transcription is serialised by a lock; every UI update crosses back to
+the main thread via ui.call_on_main. Pasting also happens on the main thread so
+pasteboard writes and the synthetic Cmd+V never interleave between dictations.
 """
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
 
-from . import sounds
-from .config import Config
+from . import sounds, ui
+from .config import (
+    CONFIG_FILE,
+    DICTIONARY_FILE,
+    LOG_FILE,
+    Config,
+    load_dictionary,
+    save_setting,
+)
 from .context import current_context
 from .engine import MLXWhisperEngine
 from .formatter import format_transcript, llm_cleanup
@@ -21,6 +31,17 @@ from .inserter import paste_text
 from .recorder import Recorder, duration_seconds
 
 MIN_UTTERANCE_SECONDS = 0.3
+SILENCE_PEAK = 1e-5  # all-zero audio means the mic permission is missing
+
+log = logging.getLogger("localflow")
+
+
+def _setup_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler(sys.stdout)],
+    )
 
 
 class LocalFlowApp:
@@ -28,49 +49,173 @@ class LocalFlowApp:
         self.config = config
         self.engine = MLXWhisperEngine(config.model, config.language)
         self.recorder = Recorder()
+        self.listener = HotkeyListener(
+            config.hotkey, self._on_press, self._on_release, self._on_cancel
+        )
         self._transcribe_lock = threading.Lock()
         self._model_ready = threading.Event()
+        self.status_bar: ui.StatusBarUI | None = None
+        self.overlay: ui.Overlay | None = None
+
+    # -- UI helpers (safe from any thread) --------------------------------
+
+    def _icon(self, icon: str) -> None:
+        if self.status_bar:
+            ui.call_on_main(self.status_bar.set_icon, icon)
+
+    def _status(self, text: str) -> None:
+        if self.status_bar:
+            ui.call_on_main(self.status_bar.set_status, text)
+
+    def _overlay_show(self, text: str) -> None:
+        if self.overlay and self.config.overlay:
+            ui.call_on_main(self.overlay.show, text)
+
+    def _overlay_flash(self, text: str, seconds: float = 1.6) -> None:
+        if self.overlay and self.config.overlay:
+            ui.call_on_main(self.overlay.flash, text, seconds)
+
+    def _cue(self, fn) -> None:
+        if self.config.sounds:
+            ui.call_on_main(fn)
+
+    # -- model lifecycle ---------------------------------------------------
+
+    def _model_short_name(self) -> str:
+        return self.config.model.rsplit("/", 1)[-1]
 
     def _load_model(self) -> None:
-        print(f"Loading model {self.config.model} (first run downloads weights)...")
+        self._status(f"Loading {self._model_short_name()}…")
+        self._icon(ui.ICON_BUSY)
         started = time.perf_counter()
-        self.engine.load()
-        print(f"Model ready in {time.perf_counter() - started:.1f}s. "
-              f"Hold [{self.config.hotkey}] and speak.")
+        try:
+            self.engine.load()
+        except Exception:
+            log.exception("model load failed")
+            self._status(f"Model failed to load — see {LOG_FILE.name}")
+            self._icon(ui.ICON_ERROR)
+            return
+        log.info("model %s ready in %.1fs", self.config.model, time.perf_counter() - started)
+        self._status(f"Ready · {self._model_short_name()} · hold [{self.config.hotkey}]")
+        self._icon(ui.ICON_IDLE)
         self._model_ready.set()
+
+    # -- hotkey callbacks (worker threads) ---------------------------------
 
     def _on_press(self) -> None:
         if not self._model_ready.is_set():
-            sounds.error_cue()
+            self._overlay_flash("⏳ Model still loading…")
+            self._cue(sounds.error_cue)
             return
         self.recorder.start()
-        sounds.start_cue()
+        self._cue(sounds.start_cue)
+        self._icon(ui.ICON_RECORDING)
+        self._overlay_show("● Listening…")
+
+    def _on_cancel(self) -> None:
+        # Another key was struck mid-hold: the user wanted fn+<key>, not us.
+        if self.recorder.recording:
+            self.recorder.stop()
+            self._icon(ui.ICON_IDLE)
+            self._overlay_flash("✕ Cancelled", 0.9)
+            log.info("recording cancelled by key combo")
 
     def _on_release(self) -> None:
         audio = self.recorder.stop()
-        sounds.stop_cue()
+        self._cue(sounds.stop_cue)
         if duration_seconds(audio) < MIN_UTTERANCE_SECONDS:
+            self._icon(ui.ICON_IDLE)
+            if self.overlay:
+                ui.call_on_main(self.overlay.hide)
             return
+        if audio.size and float(abs(audio).max()) < SILENCE_PEAK:
+            self._icon(ui.ICON_ERROR)
+            self._overlay_flash("🎙 Mic gave silence — check Microphone permission", 3.0)
+            log.warning("captured %.1fs of pure silence — mic permission?", duration_seconds(audio))
+            return
+
         with self._transcribe_lock:
+            self._icon(ui.ICON_BUSY)
+            self._overlay_show("✍️ Transcribing…")
             started = time.perf_counter()
+            self.config.dictionary = load_dictionary()  # live-reload user edits
             ctx = current_context(self.config)
-            raw = self.engine.transcribe(audio)
+            try:
+                raw = self.engine.transcribe(audio)
+            except Exception:
+                log.exception("transcription failed")
+                self._icon(ui.ICON_ERROR)
+                self._overlay_flash("⚠️ Transcription failed — see log", 2.5)
+                return
             text = format_transcript(raw, self.config, ctx)
             if text and self.config.llm_enabled:
                 text = llm_cleanup(text, self.config, ctx)
             elapsed = time.perf_counter() - started
+
             if not text:
-                print(f"(no speech detected, {elapsed:.2f}s)")
+                self._icon(ui.ICON_IDLE)
+                self._overlay_flash("… no speech detected", 1.2)
+                log.info("no speech (%.2fs, %.1fs audio)", elapsed, duration_seconds(audio))
                 return
-            paste_text(text)
-            target = ctx.app_name or "active app"
-            print(f"→ {target} in {elapsed:.2f}s: {text[:80]}{'…' if len(text) > 80 else ''}")
+
+            ui.call_on_main(self._paste_and_report, text, ctx.app_name or "app", elapsed)
+
+    # -- main-thread finish -------------------------------------------------
+
+    def _paste_and_report(self, text: str, target: str, elapsed: float) -> None:
+        paste_text(text, self.config.restore_clipboard)
+        self.status_bar.set_last(text)
+        self.status_bar.set_icon(ui.ICON_IDLE)
+        if self.config.overlay:
+            self.overlay.flash(f"✓ Pasted into {target} — also on clipboard", 1.8)
+        log.info("→ %s in %.2fs: %s", target, elapsed, text[:120])
+
+    # -- menu callbacks (main thread) ----------------------------------------
+
+    def on_toggle(self, key: str) -> None:
+        value = not getattr(self.config, key)
+        setattr(self.config, key, value)
+        save_setting(key, value)
+        self.status_bar.sync()
+        log.info("setting %s = %s", key, value)
+
+    def on_model(self, repo: str) -> None:
+        if repo == self.config.model:
+            return
+        self.config.model = repo
+        save_setting("model", repo)
+        self.engine = MLXWhisperEngine(repo, self.config.language)
+        self._model_ready.clear()
+        self.status_bar.sync()
+        threading.Thread(target=self._load_model, daemon=True).start()
+
+    def on_hotkey(self, key: str) -> None:
+        self.listener.set_key(key)
+        self.config.hotkey = key
+        save_setting("hotkey", key)
+        self.status_bar.sync()
+        self._status(f"Ready · {self._model_short_name()} · hold [{key}]")
+        log.info("hotkey switched to %s", key)
+
+    def on_open_config(self) -> None:
+        ui.open_in_default_app(str(CONFIG_FILE))
+
+    def on_open_dictionary(self) -> None:
+        ui.open_in_default_app(str(DICTIONARY_FILE))
+
+    # -- entry ----------------------------------------------------------------
 
     def run(self) -> None:
-        threading.Thread(target=self._load_model, daemon=True).start()
-        listener = HotkeyListener(self.config.hotkey, self._on_press, self._on_release)
+        _setup_logging()
+        ui.setup_nsapp()
+        self.status_bar = ui.StatusBarUI(self)
+        self.overlay = ui.Overlay()
         try:
-            listener.run()  # blocks in CFRunLoop
+            self.listener.install()
         except PermissionError as error:
+            log.error("%s", error)
             print(f"\n{error}", file=sys.stderr)
             sys.exit(1)
+        threading.Thread(target=self._load_model, daemon=True).start()
+        print("LocalFlow is in your menu bar (🎙). Logs:", LOG_FILE)
+        ui.run_event_loop()

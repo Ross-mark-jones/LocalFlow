@@ -14,6 +14,8 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".config" / "localflow"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 DICTIONARY_FILE = CONFIG_DIR / "dictionary.txt"
+SETTINGS_FILE = CONFIG_DIR / "settings.json"  # menu-bar toggles, overlaid on the TOML
+LOG_FILE = CONFIG_DIR / "localflow.log"
 
 DEFAULT_CONFIG = """\
 # LocalFlow configuration
@@ -35,6 +37,14 @@ language = "en"
 remove_fillers = true
 spoken_commands = true   # "new line" / "new paragraph" become line breaks
 capitalize = true
+
+[ui]
+sounds = true
+overlay = true           # floating "Listening…" pill while recording
+# Restore the previous clipboard after pasting. Off by default: the restore
+# can race slow apps' paste handlers, and leaving the transcript on the
+# clipboard means a failed paste is one manual Cmd+V away.
+restore_clipboard = false
 
 [llm]
 # Optional second pass through a local LLM via Ollama for heavier cleanup.
@@ -74,11 +84,21 @@ class Config:
     remove_fillers: bool = True
     spoken_commands: bool = True
     capitalize: bool = True
+    sounds: bool = True
+    overlay: bool = True
+    # Off by default: restoring the old clipboard too soon races slow apps'
+    # paste handlers, and keeping the transcript on the clipboard means a
+    # failed paste is always recoverable with Cmd+V.
+    restore_clipboard: bool = False
     llm_enabled: bool = False
     llm_model: str = "qwen2.5:1.5b"
     llm_url: str = "http://localhost:11434"
     app_profiles: dict[str, AppProfile] = field(default_factory=dict)
     dictionary: dict[str, str] = field(default_factory=dict)
+
+# Keys the menu-bar UI may persist to settings.json.
+TOGGLEABLE = ("remove_fillers", "spoken_commands", "capitalize", "sounds",
+              "overlay", "restore_clipboard", "llm_enabled", "model", "hotkey")
 
 
 def ensure_config_files() -> None:
@@ -104,6 +124,34 @@ def load_dictionary(path: Path = DICTIONARY_FILE) -> dict[str, str]:
     return entries
 
 
+def load_settings_overrides() -> dict:
+    import json
+
+    if not SETTINGS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(SETTINGS_FILE.read_text())
+        return {k: v for k, v in data.items() if k in TOGGLEABLE}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_setting(key: str, value) -> None:
+    import json
+
+    if key not in TOGGLEABLE:
+        raise ValueError(f"Not a persistable setting: {key}")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if SETTINGS_FILE.exists():
+        try:
+            data = json.loads(SETTINGS_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    data[key] = value
+    SETTINGS_FILE.write_text(json.dumps(data, indent=2))
+
+
 def load_config() -> Config:
     ensure_config_files()
     raw = tomllib.loads(CONFIG_FILE.read_text())
@@ -120,7 +168,14 @@ def load_config() -> Config:
     cfg.llm_enabled = llm.get("enabled", cfg.llm_enabled)
     cfg.llm_model = llm.get("model", cfg.llm_model)
     cfg.llm_url = llm.get("url", cfg.llm_url)
+    fmt2 = raw.get("ui", {})
+    cfg.sounds = fmt2.get("sounds", cfg.sounds)
+    cfg.overlay = fmt2.get("overlay", cfg.overlay)
+    cfg.restore_clipboard = fmt2.get("restore_clipboard", cfg.restore_clipboard)
     for bundle_id, profile in raw.get("apps", {}).items():
         cfg.app_profiles[bundle_id] = AppProfile(casual=profile.get("casual", False))
     cfg.dictionary = load_dictionary()
+    # Menu-bar settings win over the TOML: they're the user's latest choice.
+    for key, value in load_settings_overrides().items():
+        setattr(cfg, key, value)
     return cfg
