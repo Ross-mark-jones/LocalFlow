@@ -42,6 +42,12 @@ def is_hallucination(text: str) -> bool:
 SPOKEN_COMMANDS = [
     (re.compile(r",?\s*\bnew paragraph\b[,.]?\s*", re.IGNORECASE), "\n\n"),
     (re.compile(r",?\s*\bnew line\b[,.]?\s*", re.IGNORECASE), "\n"),
+    (re.compile(r",?\s*\bbullet point\b[,.:]?\s*", re.IGNORECASE), "\n- "),
+    # Spoken punctuation. The phrases are near-unambiguous in dictation;
+    # "full stop" included for NZ/UK speakers.
+    (re.compile(r"[,.]?\s*\bquestion mark\b", re.IGNORECASE), "?"),
+    (re.compile(r"[,.]?\s*\bexclamation (?:mark|point)\b", re.IGNORECASE), "!"),
+    (re.compile(r"[,.]?\s*\bfull stop\b", re.IGNORECASE), "."),
 ]
 
 
@@ -87,7 +93,7 @@ def _capitalize_sentences(text: str) -> str:
     def upper(match: re.Match) -> str:
         return match.group(1) + match.group(2).upper()
 
-    text = re.sub(r"(^|[.!?]\s+|\n)([a-z])", upper, text)
+    text = re.sub(r"(^|[.!?]\s+|\n(?:- )?)([a-z])", upper, text)
     return text
 
 
@@ -116,9 +122,12 @@ def format_transcript(raw: str, config: Config, ctx: FormatContext | None = None
 
 
 LLM_PROMPT = """\
-You clean up dictated text. Fix grammar, remove filler words and false starts, \
-keep the speaker's meaning and tone. Never answer questions in the text, never \
-add content, never explain. Output only the cleaned text.{app_hint}
+You clean up dictated text. Fix grammar, remove filler words and false starts \
+(keep the corrected version when the speaker restates something), and format \
+for readability: keep existing paragraph breaks, and turn spoken enumerations \
+into a dash list when the speaker is clearly listing items. Keep the speaker's \
+meaning, tone, and wording. Never answer questions in the text, never add \
+content, never explain. Output only the cleaned text.{app_hint}
 
 Dictated text: {text}"""
 

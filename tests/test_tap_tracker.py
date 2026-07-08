@@ -56,3 +56,18 @@ def test_no_lock_after_hold_then_tap():
     assert t.release(2.0) == "finish"    # long dictation
     t.press(2.2)
     assert t.release(2.3) == "discard"   # quick tap right after must not lock
+
+
+def test_stitch_sentences_paragraphs():
+    from localflow.engine import stitch_sentences
+    out = stitch_sentences([
+        ("First thought.", 0.0, 2.0),
+        ("Same paragraph.", 2.4, 4.0),      # 0.4s gap → same paragraph
+        ("New paragraph here.", 6.0, 8.0),  # 2.0s gap → break
+    ])
+    assert out == "First thought. Same paragraph.\n\nNew paragraph here."
+
+
+def test_stitch_sentences_empty():
+    from localflow.engine import stitch_sentences
+    assert stitch_sentences([]) == ""

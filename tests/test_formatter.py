@@ -68,3 +68,16 @@ def test_commands_disabled():
     config = make_config(spoken_commands=False)
     out = format_transcript("First point new line second point.", config)
     assert "\n" not in out
+
+
+def test_spoken_punctuation():
+    config = make_config()
+    assert format_transcript("Are you coming question mark", config) == "Are you coming?"
+    assert format_transcript("That's amazing exclamation mark", config) == "That's amazing!"
+    assert format_transcript("Send it today full stop", config) == "Send it today."
+
+
+def test_bullet_points():
+    config = make_config()
+    out = format_transcript("We need bullet point creative bullet point offer.", config)
+    assert out == "We need\n- Creative\n- Offer."

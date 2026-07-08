@@ -93,6 +93,9 @@ class Config:
     llm_enabled: bool = False
     llm_model: str = "qwen2.5:1.5b"
     llm_url: str = "http://localhost:11434"
+    # Only send longer dictations through the LLM: short ones don't need it
+    # and shouldn't pay the extra second of latency.
+    llm_min_words: int = 12
     app_profiles: dict[str, AppProfile] = field(default_factory=dict)
     dictionary: dict[str, str] = field(default_factory=dict)
 
@@ -168,6 +171,7 @@ def load_config() -> Config:
     cfg.llm_enabled = llm.get("enabled", cfg.llm_enabled)
     cfg.llm_model = llm.get("model", cfg.llm_model)
     cfg.llm_url = llm.get("url", cfg.llm_url)
+    cfg.llm_min_words = llm.get("min_words", cfg.llm_min_words)
     fmt2 = raw.get("ui", {})
     cfg.sounds = fmt2.get("sounds", cfg.sounds)
     cfg.overlay = fmt2.get("overlay", cfg.overlay)

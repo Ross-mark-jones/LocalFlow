@@ -244,7 +244,8 @@ class LocalFlowApp:
                 self._overlay_flash("⚠️ Transcription failed — see log", 2.5)
                 return
             text = format_transcript(raw, self.config, ctx)
-            if text and self.config.llm_enabled:
+            if (text and self.config.llm_enabled
+                    and len(text.split()) >= self.config.llm_min_words):
                 text = llm_cleanup(text, self.config, ctx)
             elapsed = time.perf_counter() - started
 

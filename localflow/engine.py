@@ -42,6 +42,25 @@ def _to_wav_file(audio: np.ndarray) -> str:
     return path
 
 
+PARAGRAPH_PAUSE_SECONDS = 1.2
+
+
+def stitch_sentences(sentences: "list[tuple[str, float, float]]") -> str:
+    """Join (text, start, end) sentence tuples, turning long pauses between
+    them into paragraph breaks — dictated structure for free."""
+    parts: list[str] = []
+    prev_end: float | None = None
+    for text, start, end in sentences:
+        text = text.strip()
+        if not text:
+            continue
+        if prev_end is not None:
+            parts.append("\n\n" if (start - prev_end) >= PARAGRAPH_PAUSE_SECONDS else " ")
+        parts.append(text)
+        prev_end = end
+    return "".join(parts)
+
+
 class ParakeetEngine:
     """Parakeet TDT on Apple Silicon via parakeet-mlx."""
 
@@ -56,14 +75,23 @@ class ParakeetEngine:
         # Warm-up compiles the Metal kernels so the first dictation is fast.
         self.transcribe(np.zeros(int(0.5 * SAMPLE_RATE), dtype=np.float32))
 
+    def _result_text(self, result) -> str:
+        try:
+            sentences = [(s.text, s.start, s.end) for s in result.sentences]
+            if sentences:
+                return stitch_sentences(sentences).strip()
+        except AttributeError:
+            pass  # parakeet-mlx version without sentence timing
+        return result.text.strip()
+
     def transcribe(self, audio: "np.ndarray | str") -> str:
         if self._pk is None:
             self.load()
         if isinstance(audio, str):
-            return self._pk.transcribe(audio).text.strip()
+            return self._result_text(self._pk.transcribe(audio))
         path = _to_wav_file(audio)
         try:
-            return self._pk.transcribe(path).text.strip()
+            return self._result_text(self._pk.transcribe(path))
         finally:
             os.unlink(path)
 
