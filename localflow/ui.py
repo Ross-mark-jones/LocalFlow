@@ -50,9 +50,9 @@ TOGGLES = [
 ]
 
 MODELS = [
-    ("Large v3 Turbo — accurate (default)", "mlx-community/whisper-large-v3-turbo"),
-    ("Base English — fast, light", "mlx-community/whisper-base.en"),
-    ("Tiny — fastest, rough", "mlx-community/whisper-tiny"),
+    ("Small English — recommended (8–16 GB Macs)", "mlx-community/whisper-small.en-mlx"),
+    ("Base English — fastest usable", "mlx-community/whisper-base.en-mlx"),
+    ("Large v3 Turbo — most accurate (16 GB+ only)", "mlx-community/whisper-large-v3-turbo"),
 ]
 
 HOTKEYS = [

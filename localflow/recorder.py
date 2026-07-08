@@ -54,3 +54,24 @@ class Recorder:
 
 def duration_seconds(audio: np.ndarray) -> float:
     return len(audio) / SAMPLE_RATE
+
+
+MAX_UTTERANCE_SECONDS = 120
+
+
+def trim_silence(audio: np.ndarray, pad_seconds: float = 0.25) -> np.ndarray:
+    """Cut leading/trailing silence so Whisper only processes actual speech —
+    on memory-tight machines the difference between 2s and 30s of inference.
+    Returns an empty array when there's no signal above the noise floor."""
+    if audio.size == 0:
+        return audio
+    peak = float(np.abs(audio).max())
+    threshold = max(0.005, peak * 0.05)
+    loud = np.where(np.abs(audio) > threshold)[0]
+    if loud.size == 0:
+        return np.zeros(0, dtype=np.float32)
+    pad = int(pad_seconds * SAMPLE_RATE)
+    start = max(0, int(loud[0]) - pad)
+    end = min(len(audio), int(loud[-1]) + pad)
+    trimmed = audio[start:end]
+    return trimmed[: MAX_UTTERANCE_SECONDS * SAMPLE_RATE]

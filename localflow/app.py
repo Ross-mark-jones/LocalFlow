@@ -28,7 +28,7 @@ from .engine import MLXWhisperEngine
 from .formatter import format_transcript, llm_cleanup
 from .hotkey import HotkeyListener
 from .inserter import paste_text
-from .recorder import Recorder, duration_seconds
+from .recorder import Recorder, duration_seconds, trim_silence
 
 MIN_UTTERANCE_SECONDS = 0.3
 SILENCE_PEAK = 1e-5  # all-zero audio means the mic permission is missing
@@ -134,6 +134,14 @@ class LocalFlowApp:
             log.warning("captured %.1fs of pure silence — mic permission?", duration_seconds(audio))
             return
 
+        held = duration_seconds(audio)
+        audio = trim_silence(audio)
+        if duration_seconds(audio) < MIN_UTTERANCE_SECONDS:
+            self._icon(ui.ICON_IDLE)
+            self._overlay_flash("… no speech detected", 1.2)
+            log.info("nothing above noise floor (held %.1fs)", held)
+            return
+
         with self._transcribe_lock:
             self._icon(ui.ICON_BUSY)
             self._overlay_show("✍️ Transcribing…")
@@ -155,7 +163,8 @@ class LocalFlowApp:
             if not text:
                 self._icon(ui.ICON_IDLE)
                 self._overlay_flash("… no speech detected", 1.2)
-                log.info("no speech (%.2fs, %.1fs audio)", elapsed, duration_seconds(audio))
+                log.info("no speech (%.2fs, %.1fs speech of %.1fs held)",
+                         elapsed, duration_seconds(audio), held)
                 return
 
             ui.call_on_main(self._paste_and_report, text, ctx.app_name or "app", elapsed)

@@ -26,10 +26,10 @@ DEFAULT_CONFIG = """\
 key = "fn"
 
 [asr]
-# Any mlx-community Whisper repo. large-v3-turbo is the accuracy/speed sweet spot
-# (~1.6 GB download on first run). Use "mlx-community/whisper-base.en" for a
-# lightweight English-only model (~80 MB).
-model = "mlx-community/whisper-large-v3-turbo"
+# Any mlx-community Whisper repo. small.en is the sweet spot on 8-16 GB
+# machines; large-v3-turbo is more accurate but needs 16 GB+ to run without
+# swapping (which makes it *slower*, not better, on small machines).
+model = "mlx-community/whisper-small.en-mlx"
 # Force a language code (e.g. "en") or leave empty to auto-detect.
 language = "en"
 
@@ -79,7 +79,7 @@ class AppProfile:
 @dataclass
 class Config:
     hotkey: str = "fn"
-    model: str = "mlx-community/whisper-large-v3-turbo"
+    model: str = "mlx-community/whisper-small.en-mlx"
     language: str | None = "en"
     remove_fillers: bool = True
     spoken_commands: bool = True

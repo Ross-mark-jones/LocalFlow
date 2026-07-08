@@ -22,11 +22,20 @@ from .config import AppProfile, Config
 # "like" and "so" carry meaning too often to strip safely without an LLM.
 FILLERS = r"um+|uh+|erm+|uhm+|mmm+|hmm+"
 
-# Whisper hallucinates these on silence / noise-only audio.
+# Whisper hallucinates these on silence / noise-only audio — often repeated
+# ("Thank you. Thank you."), so the filter checks sentence-by-sentence.
 HALLUCINATIONS = {
-    "thank you.", "thanks for watching.", "thank you for watching.",
-    "you", "you.", "bye.", ".",
+    "thank you", "thanks for watching", "thank you for watching",
+    "you", "bye", "bye bye", "the end", "so",
 }
+
+
+def is_hallucination(text: str) -> bool:
+    """True when every sentence is a known silence-hallucination phrase."""
+    sentences = [s.strip().lower() for s in re.split(r"[.!?]+", text) if s.strip()]
+    if not sentences:
+        return True
+    return all(s in HALLUCINATIONS for s in sentences)
 
 # Strip a comma glued to the command (ASR artefact) but never a preceding
 # period — that belongs to the sentence before the command.
@@ -85,7 +94,7 @@ def _capitalize_sentences(text: str) -> str:
 def format_transcript(raw: str, config: Config, ctx: FormatContext | None = None) -> str:
     """Run the full rules pipeline over raw ASR output."""
     text = raw.strip()
-    if not text or text.lower() in HALLUCINATIONS:
+    if not text or is_hallucination(text):
         return ""
 
     text = _apply_dictionary(text, config.dictionary)
