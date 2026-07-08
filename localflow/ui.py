@@ -105,7 +105,7 @@ class _MenuTarget(NSObject):
 class Overlay:
     """Wispr-style pill at the bottom-centre of the active screen."""
 
-    WIDTH, HEIGHT = 240, 40
+    WIDTH, HEIGHT = 340, 40
 
     def __init__(self) -> None:
         rect = NSMakeRect(0, 0, self.WIDTH, self.HEIGHT)
