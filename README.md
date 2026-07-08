@@ -1,59 +1,67 @@
-# LocalFlow
+# LocalFlow 🎙
 
-A local, private Wispr Flow clone for macOS. Hold `fn`, speak, release — formatted text lands in whatever app you're in. Runs 100% on-device on Apple Silicon; nothing leaves your Mac.
+Talk instead of type, anywhere on your Mac. **Hold the `fn` (🌐) key, speak, release** — your words appear wherever your cursor is, already cleaned up: no "um"s, proper punctuation, proper capitalisation.
 
-## Quick start
+Free, open source, and 100% private: speech recognition runs entirely on your Mac (Apple Silicon + MLX). Nothing you say ever leaves it. No subscription, no account, no cloud.
 
-Open **LocalFlow** from `~/Applications` (or Spotlight). It lives in the menu bar as 🎙 — no Dock icon, no window. Click the icon for all settings; enable **Start at login** there to make it permanent.
+## Install (2 minutes)
 
-Default engine is **Parakeet 110M**: sub-second transcription on an M1 with accuracy above whisper-small at ~250 MB of memory.
-
-### Development
+You need an Apple Silicon Mac (M1 or newer) and [Homebrew](https://brew.sh). Then paste this into Terminal:
 
 ```bash
-cd ~/Apps/LocalFlow            # repo lives OUTSIDE iCloud on purpose
-./start.sh                     # run from source (env in ~/.localflow/venv)
-./scripts/build-app.sh         # rebuild ~/Applications/LocalFlow.app
+curl -fsSL https://raw.githubusercontent.com/Ross-mark-jones/LocalFlow/main/install.sh | sh
+```
+
+The installer sets everything up and opens the app. Two one-time permission prompts follow:
+
+1. **Accessibility** — a dialog appears; click *Open System Settings*, turn **LocalFlow** on. The app connects by itself.
+2. **Microphone** — on your first dictation, click *Allow*.
+
+That's it. Look for the **🎙 in your menu bar**. The first launch downloads the speech model (~600 MB) — give it a minute.
+
+## Using it
+
+- **Hold `fn`, speak, release.** A pill appears at the bottom of your screen ("● Listening…") so you always know when it's recording. Your text pastes into whatever app you're in — usually in under a second.
+- Say **"new line"** or **"new paragraph"** for line breaks.
+- Pressing any other key while holding `fn` cancels the recording (so `fn`+arrow shortcuts still work).
+- Your transcript is also left on the clipboard — if a paste ever misses, just Cmd+V.
+
+## The 🎙 menu
+
+| | |
+|---|---|
+| **History** | Your recent dictations — click one to copy it. *Open Library…* gives you a searchable page of everything you've ever dictated (stored only on your Mac). |
+| **Toggles** | Filler-word removal, spoken commands, auto-capitalise, sounds, the overlay pill, clipboard behaviour. |
+| **Model** | Parakeet 110M is the default (fast + accurate). Bigger models available for 16 GB+ Macs. |
+| **Hold-to-talk key** | Prefer right-⌘ or right-⌥ over `fn`? Switch here. |
+| **Personal dictionary** | Teach it names and brand terms it mishears: one `spoken -> Written` line each. |
+| **Start at login** | Make it always-on. |
+
+## How it works
+
+Wispr Flow-style pipeline, entirely on-device: a Quartz event tap watches the `fn` key → mic audio (16 kHz) → [Parakeet TDT](https://huggingface.co/mlx-community/parakeet-tdt_ctc-110m) speech recognition via MLX on the Apple Silicon GPU → a rules formatter (fillers, hallucination filter, personal dictionary, per-app tone — casual in Slack/iMessage, formal elsewhere) → clipboard paste into the frontmost app. An optional [Ollama](https://ollama.com) pass adds LLM-grade cleanup if you want it.
+
+## Development
+
+```bash
+cd ~/Apps/LocalFlow
+./start.sh                     # run from source (env lives in ~/.localflow/venv)
+./scripts/build-app.sh         # rebuild /Applications/LocalFlow.app
 UV_PROJECT_ENVIRONMENT=~/.localflow/venv uv run python -m pytest
 ```
 
-Note: after `build-app.sh`, macOS may treat the rebuilt bundle as a new app and re-ask for Accessibility once.
+Three hard-won constraints, learned the painful way — see [PLAN.md](PLAN.md) for the roadmap:
 
-## One-time macOS setup
+1. The bundle's main executable must be the compiled `scripts/launcher.c` binary — a script executable runs under `/bin/sh` and macOS attributes permission checks to Apple's shell, so Accessibility grants never match.
+2. All MLX engine calls run on one dedicated thread — MLX compute streams are thread-bound.
+3. Keep the Python env out of iCloud-synced folders — iCloud evicts venv files and imports break intermittently.
 
-1. **Accessibility** — on first launch the app prompts and waits; enable **LocalFlow** in System Settings → Privacy & Security → Accessibility and it connects automatically.
-2. **Microphone** — macOS prompts on first dictation; approve it.
-3. **Globe key** — System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing** (`./start.sh doctor` checks this).
+## Troubleshooting
 
-## CLI (from the repo)
+- **Nothing happens when I hold `fn`** → System Settings → Privacy & Security → Accessibility → LocalFlow must be ON. Also set Keyboard → "Press 🌐 key to" → *Do Nothing*.
+- **Dictations come back empty** → check Microphone permission for LocalFlow.
+- **Anything else** → every dictation is logged with timings at `~/.config/localflow/localflow.log`.
 
-| Command | What it does |
-|---|---|
-| `./start.sh` | Run the menu-bar app from source |
-| `./start.sh doctor` | Check permissions and keyboard settings |
-| `./start.sh transcribe file.wav` | Test the pipeline on an audio file, no mic needed |
-| `./start.sh --model mlx-community/whisper-base.en-mlx` | Try a different model |
-| `./start.sh --key right_cmd` | Use a different hold key |
+## Licence
 
-## Configuration
-
-Created on first run:
-
-- `~/.config/localflow/config.toml` — hotkey, model, formatting toggles, per-app tone profiles, optional local-LLM cleanup via Ollama
-- `~/.config/localflow/dictionary.txt` — personal dictionary (`spoken -> Written` per line), the fix for names and brand terms ASR gets wrong
-
-### Optional LLM cleanup
-
-For Wispr-style heavier rewriting (false starts, rambling → clean prose), install [Ollama](https://ollama.com) and enable it:
-
-```bash
-brew install ollama
-ollama pull qwen2.5:1.5b
-# then set llm.enabled = true in ~/.config/localflow/config.toml
-```
-
-The rules pipeline (filler removal, punctuation, capitalisation, spoken commands like "new line", per-app tone) runs regardless and needs nothing extra.
-
-## How it compares to Wispr Flow
-
-Wispr Flow streams your audio to their cloud (their own ASR + personalised LLM, ~700 ms round trip). LocalFlow runs the same shaped pipeline — ASR → formatting layer → paste into the frontmost app — entirely on-device, so it's private, free, and works offline. What it doesn't have (yet): learning from your corrections, screen-content context, code-switched multilingual ASR, and a native menu-bar UI. See [PLAN.md](PLAN.md) for the roadmap.
+[MIT](LICENSE) — built by Ross Jones with Claude.
