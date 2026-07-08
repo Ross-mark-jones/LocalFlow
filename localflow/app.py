@@ -191,6 +191,7 @@ class LocalFlowApp:
         while True:
             time.sleep(5)
             try:
+                self.recorder.reap()  # close the mic stream after idle time
                 if self.listener.ensure_enabled():
                     log.warning("event tap was disabled by macOS — re-enabled")
                 started = self.tap_tracker.press_time
