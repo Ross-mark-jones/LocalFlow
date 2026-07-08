@@ -112,6 +112,7 @@ class LocalFlowApp:
             self._cue(sounds.error_cue)
             return
         self.recorder.start()
+        log.info("recording started")
         self._cue(sounds.start_cue)
         self._icon(ui.ICON_RECORDING)
         self._overlay_show("● Listening…")
@@ -126,6 +127,7 @@ class LocalFlowApp:
 
     def _on_release(self) -> None:
         audio = self.recorder.stop()
+        log.info("recording stopped (%.1fs)", duration_seconds(audio))
         self._cue(sounds.stop_cue)
         if duration_seconds(audio) < MIN_UTTERANCE_SECONDS:
             self._icon(ui.ICON_IDLE)
@@ -235,20 +237,29 @@ class LocalFlowApp:
 
     def _connect_hotkey(self) -> None:
         """Main thread: install the tap now, or park in a wait loop until the
-        user grants Accessibility (first launch of the .app)."""
-        try:
-            self.listener.install()
-        except PermissionError:
-            from .doctor import check_accessibility
+        user grants Accessibility (first launch of the .app).
 
+        Trust is checked explicitly: without the grant, a listen-only tap can
+        be created successfully yet silently receive no events, so tap
+        creation succeeding proves nothing."""
+        from .doctor import check_accessibility
+
+        if not check_accessibility():
             check_accessibility(prompt=True)  # pops the system dialog
-            log.warning("waiting for Accessibility grant")
+            log.warning("not trusted for Accessibility — waiting for grant")
             self._icon(ui.ICON_ERROR)
             self._status("Enable LocalFlow in Accessibility settings…")
             self._overlay_flash("Grant Accessibility to LocalFlow — I'll connect automatically", 6.0)
             threading.Thread(target=self._wait_for_accessibility, daemon=True).start()
             return
-        log.info("hotkey listener connected (%s)", self.config.hotkey)
+        try:
+            self.listener.install()
+        except PermissionError as error:
+            log.error("%s", error)
+            self._icon(ui.ICON_ERROR)
+            self._status("Hotkey setup failed — see log")
+            return
+        log.info("hotkey listener connected (%s), accessibility trusted", self.config.hotkey)
         if self._model_ready.is_set():
             self._icon(ui.ICON_IDLE)
             self._status(f"Ready · {self._model_short_name()} · hold [{self.config.hotkey}]")
