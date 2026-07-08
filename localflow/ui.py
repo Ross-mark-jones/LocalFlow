@@ -257,7 +257,7 @@ class StatusBarUI:
         then Library/Clear actions. Main thread only."""
         import time as _time
 
-        self._history_menu.removeAllItems_()
+        self._history_menu.removeAllItems()
         if not entries:
             placeholder = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 "No dictations yet", None, "")
