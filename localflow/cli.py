@@ -8,9 +8,21 @@
 from __future__ import annotations
 
 import argparse
+import os
+
+
+def _fix_path() -> None:
+    """Finder/launchd-launched apps get a minimal PATH without Homebrew, but
+    parakeet-mlx shells out to ffmpeg (/opt/homebrew/bin). Prepend it here so
+    the app behaves the same however it was launched."""
+    extras = [p for p in ("/opt/homebrew/bin", "/usr/local/bin")
+              if p not in os.environ.get("PATH", "")]
+    if extras:
+        os.environ["PATH"] = ":".join(extras) + ":" + os.environ.get("PATH", "")
 
 
 def main() -> None:
+    _fix_path()
     parser = argparse.ArgumentParser(prog="localflow", description="Local Wispr Flow clone for macOS.")
     parser.add_argument("--model", help="Override ASR model repo (e.g. mlx-community/whisper-base.en)")
     parser.add_argument("--key", help="Override hold-to-talk key (fn, right_cmd, right_alt, ...)")

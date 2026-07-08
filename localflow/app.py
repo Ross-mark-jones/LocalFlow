@@ -10,6 +10,7 @@ pasteboard writes and the synthetic Cmd+V never interleave between dictations.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import threading
 import time
@@ -85,6 +86,9 @@ class LocalFlowApp:
         return self.config.model.rsplit("/", 1)[-1]
 
     def _load_model(self) -> None:
+        import shutil
+
+        log.info("ffmpeg=%s", shutil.which("ffmpeg"))  # parakeet needs it; None = broken PATH
         self._status(f"Loading {self._model_short_name()}…")
         self._icon(ui.ICON_BUSY)
         started = time.perf_counter()

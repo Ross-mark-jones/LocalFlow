@@ -37,6 +37,7 @@ PLIST
 
 cat > "$APP/Contents/MacOS/LocalFlow" <<SH
 #!/bin/sh
+export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
 "\$HOME/.localflow/venv/bin/localflow" "\$@" &
 PID=\$!
 trap 'kill -TERM \$PID 2>/dev/null' TERM INT
