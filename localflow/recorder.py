@@ -1,26 +1,23 @@
 """Microphone capture. 16 kHz mono float32 — exactly what Whisper expects,
 so no resampling step sits between the mic and the model.
 
-The stream is persistent: start()/stop() only toggle a capture flag. Opening
-and closing CoreAudio streams in quick succession (which double-tap
-hands-free mode does) can wedge PortAudio so hard that stop() blocks forever
-— with a persistent stream, stop() is a flag flip plus an array concat and
-can never hang the event dispatcher. The watchdog calls reap() to actually
-close the stream after ~10s of no dictation, so the mic indicator doesn't
-stay on permanently.
+One long-lived stream, opened once and kept open for the app's lifetime.
+start()/stop() only toggle a capture flag. This matters: PortAudio on macOS
+throws paInternalError (-9986) if you close and reopen an input stream, so any
+open/close churn eventually wedges the mic entirely. A single persistent
+stream sidesteps that completely — the cost is the mic indicator staying lit
+while LocalFlow runs, which is honest for an always-listening dictation tool.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-import time
 
 import numpy as np
 import sounddevice as sd
 
 SAMPLE_RATE = 16_000
-STREAM_IDLE_CLOSE_SECONDS = 10
 
 log = logging.getLogger("localflow")
 
@@ -30,55 +27,78 @@ class Recorder:
         self._chunks: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
         self._capturing = False
-        self._last_use = 0.0
         self._lock = threading.Lock()
 
-    def start(self) -> None:
+    def _open_stream(self) -> sd.InputStream:
+        stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+            callback=self._on_audio,
+        )
+        stream.start()
+        return stream
+
+    def _ensure_stream(self) -> None:
+        """Open the persistent stream if needed. On PortAudio's internal error
+        (state gone bad after sleep/wake or a device change), reset PortAudio
+        once and retry — the recovery path for a mic that stopped responding."""
+        if self._stream is not None and self._stream.active:
+            return
+        if self._stream is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        try:
+            self._stream = self._open_stream()
+        except sd.PortAudioError:
+            log.warning("input stream open failed — resetting PortAudio and retrying")
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception:
+                log.exception("PortAudio reset failed")
+            self._stream = self._open_stream()  # if this raises, caller handles it
+
+    def warm_up(self) -> None:
+        """Open the stream up front so the first dictation isn't the one that
+        discovers a mic problem. Safe to call before permissions are granted;
+        failures are logged, not raised."""
         with self._lock:
-            if self._capturing:
-                return
-            if self._stream is None:
-                self._stream = sd.InputStream(
-                    samplerate=SAMPLE_RATE,
-                    channels=1,
-                    dtype="float32",
-                    callback=self._on_audio,
-                )
-                self._stream.start()
+            try:
+                self._ensure_stream()
+            except Exception:
+                log.exception("microphone warm-up failed")
+
+    def start(self) -> bool:
+        """Begin capturing. Returns False if the mic can't be opened (caller
+        should surface an error rather than pretend it's recording)."""
+        with self._lock:
+            try:
+                self._ensure_stream()
+            except Exception:
+                log.exception("could not start microphone")
+                return False
             self._chunks = []
             self._capturing = True
+            return True
 
     def _on_audio(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         if self._capturing:
             self._chunks.append(indata.copy())
 
     def stop(self) -> np.ndarray:
-        """Stop capturing and return the audio. Never touches the underlying
-        stream, so it cannot block."""
+        """Stop capturing and return the audio. Never touches the stream, so it
+        cannot block or fail."""
         with self._lock:
             self._capturing = False
-            self._last_use = time.monotonic()
             if not self._chunks:
                 return np.zeros(0, dtype=np.float32)
             audio = np.concatenate(self._chunks)[:, 0]
             self._chunks = []
             return audio
-
-    def reap(self) -> None:
-        """Close the stream after idle time. Called from the watchdog thread —
-        if CoreAudio ever wedges on close, only the watchdog stalls, never the
-        event dispatcher."""
-        with self._lock:
-            if self._stream is None or self._capturing:
-                return
-            if time.monotonic() - self._last_use < STREAM_IDLE_CLOSE_SECONDS:
-                return
-            stream, self._stream = self._stream, None
-        try:
-            stream.stop()
-            stream.close()
-        except Exception:
-            log.exception("closing idle audio stream failed")
 
     @property
     def recording(self) -> bool:

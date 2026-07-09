@@ -110,6 +110,7 @@ class LocalFlowApp:
             self._icon(ui.ICON_ERROR)
             return
         log.info("model %s ready in %.1fs", self.config.model, time.perf_counter() - started)
+        self.recorder.warm_up()  # open the persistent mic stream once, now
         self._status(f"Ready · {self._model_short_name()} · hold [{self.config.hotkey}]")
         self._icon(ui.ICON_IDLE)
         self._model_ready.set()
@@ -151,7 +152,13 @@ class LocalFlowApp:
                 log.info("hands-free recording finished by tap")
                 self._finish_recording()
                 return
-            self.recorder.start()
+            if not self.recorder.start():
+                # Mic failed to open — don't leave the tracker mid-gesture, or
+                # the next press is misread as a double-tap.
+                self.tap_tracker.cancel()
+                self._icon(ui.ICON_ERROR)
+                self._overlay_flash("🎙 Microphone unavailable — check Microphone permission", 3.0)
+                return
             log.info("recording started")
             self._cue(sounds.start_cue)
             self._icon(ui.ICON_RECORDING)
@@ -191,7 +198,6 @@ class LocalFlowApp:
         while True:
             time.sleep(5)
             try:
-                self.recorder.reap()  # close the mic stream after idle time
                 if self.listener.ensure_enabled():
                     log.warning("event tap was disabled by macOS — re-enabled")
                 started = self.tap_tracker.press_time
