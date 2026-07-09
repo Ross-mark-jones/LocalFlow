@@ -35,7 +35,14 @@ from .recorder import Recorder, duration_seconds, trim_silence
 
 MIN_UTTERANCE_SECONDS = 0.3
 SILENCE_PEAK = 1e-5  # all-zero audio means the mic permission is missing
-MAX_RECORDING_SECONDS = 300  # watchdog auto-finish: a lost key event must never record forever
+MAX_RECORDING_SECONDS = 600  # watchdog auto-finish (10 min) — a lost key event must never record forever
+
+# Hands-free streaming: transcribe on natural pauses and paste as you go, so a
+# long reading flows into the document instead of arriving in one lump at the end.
+STREAM_PAUSE_SECONDS = 0.7      # trailing silence that ends a chunk
+STREAM_MIN_SPEECH_SECONDS = 1.0  # don't flush tiny fragments
+STREAM_MAX_SEGMENT_SECONDS = 30  # fallback flush if the reader never pauses
+STREAM_POLL_SECONDS = 0.35
 
 log = logging.getLogger("localflow")
 
@@ -61,6 +68,10 @@ class LocalFlowApp:
         self.tap_tracker = TapTracker()
         self._transcribe_lock = threading.Lock()
         self._model_ready = threading.Event()
+        self._streaming = False
+        self._stream_thread: threading.Thread | None = None
+        self._stream_text: list[str] = []  # accumulates segments for one history entry
+        self._stream_started = 0.0
         # MLX streams are thread-bound (parakeet-mlx raises "no Stream in
         # current thread" if load and inference happen on different threads),
         # so every engine call runs on this single dedicated thread.
@@ -168,9 +179,10 @@ class LocalFlowApp:
             action = self.tap_tracker.release(ts)
             if action == "none":
                 return
-            if action == "lock":  # double-tap → hands-free
-                log.info("hands-free recording (double-tap) — tap fn to finish")
-                self._overlay_show("● Recording — tap fn to finish · Esc cancels")
+            if action == "lock":  # double-tap → hands-free streaming
+                log.info("hands-free streaming started — tap fn to finish")
+                self._overlay_show("● Reading — text streams in · tap fn to finish")
+                self._start_streaming()
                 return
             if action == "discard":  # lone short tap
                 self.recorder.stop()
@@ -182,8 +194,11 @@ class LocalFlowApp:
 
     def _abort_recording(self, reason: str) -> None:
         self.tap_tracker.cancel()
-        if self.recorder.recording:
+        was_streaming = self._streaming
+        self._streaming = False
+        if self.recorder.recording or was_streaming:
             self.recorder.stop()
+            self._stream_text = []  # discard accumulated text; nothing more pastes
             self._icon(ui.ICON_IDLE)
             self._overlay_flash("✕ Cancelled", 0.9)
             log.info("recording %s", reason)
@@ -208,9 +223,80 @@ class LocalFlowApp:
             except Exception:
                 log.exception("watchdog error")
 
+    # -- streaming (hands-free) --------------------------------------------
+
+    def _start_streaming(self) -> None:
+        self._streaming = True
+        self._stream_text = []
+        self._stream_started = time.monotonic()
+        self._stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self._stream_thread.start()
+
+    def _stream_loop(self) -> None:
+        """Poll the recorder for completed (pause-delimited) segments and paste
+        them live. Runs until _finish_streaming clears the flag."""
+        self.config.dictionary = load_dictionary()
+        while self._streaming and self.recorder.recording:
+            time.sleep(STREAM_POLL_SECONDS)
+            segment = self.recorder.flush_segment(
+                STREAM_PAUSE_SECONDS, STREAM_MIN_SPEECH_SECONDS, STREAM_MAX_SEGMENT_SECONDS)
+            if segment is not None and duration_seconds(segment) >= MIN_UTTERANCE_SECONDS:
+                self._transcribe_segment(segment)
+
+    def _transcribe_segment(self, audio) -> None:
+        """Transcribe one streamed chunk, paste it, and accumulate it for the
+        single history entry written when the reading ends."""
+        with self._transcribe_lock:
+            ctx = current_context(self.config)
+            try:
+                raw = self._engine_thread.submit(self.engine.transcribe, audio).result()
+            except Exception:
+                log.exception("segment transcription failed")
+                return
+            text = format_transcript(raw, self.config, ctx)
+        if not text:
+            return
+        self._stream_text.append(text)
+        log.info("streamed segment (%.1fs): %s", duration_seconds(audio), text[:80])
+        ui.call_on_main(self._paste_segment, text)
+
+    def _paste_segment(self, text: str) -> None:
+        # Trailing space so consecutive segments don't run together.
+        paste_text(text + " ", self.config.restore_clipboard)
+        self.status_bar.set_last(text)
+
+    def _finish_streaming(self) -> None:
+        self._streaming = False
+        thread = self._stream_thread
+        if thread is not None:
+            thread.join(timeout=5)  # let any in-flight segment finish; lock keeps pastes ordered
+        self._stream_thread = None
+        remainder = self.recorder.stop()
+        self._cue(sounds.stop_cue)
+        if duration_seconds(trim_silence(remainder)) >= MIN_UTTERANCE_SECONDS:
+            self._transcribe_segment(trim_silence(remainder))
+        full = " ".join(self._stream_text).strip()
+        self._stream_text = []
+        self._icon(ui.ICON_IDLE)
+        if full:
+            history.add(full, app_name=None, audio_seconds=0.0,
+                        elapsed_seconds=time.monotonic() - self._stream_started)
+            ui.call_on_main(self._finalize_stream_ui, full)
+            log.info("hands-free reading done (%d chars)", len(full))
+        elif self.overlay:
+            ui.call_on_main(self.overlay.hide)
+
+    def _finalize_stream_ui(self, full: str) -> None:
+        self.status_bar.refresh_history(history.recent(10))
+        if self.config.overlay:
+            self.overlay.flash("✓ Reading complete", 1.6)
+
     def _finish_recording(self) -> None:
         """Dispatcher thread: stop capture fast, hand the slow work off so the
         event queue stays responsive during transcription."""
+        if self._streaming:
+            threading.Thread(target=self._finish_streaming, daemon=True).start()
+            return
         audio = self.recorder.stop()
         log.info("recording stopped (%.1fs)", duration_seconds(audio))
         self._cue(sounds.stop_cue)

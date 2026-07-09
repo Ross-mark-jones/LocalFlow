@@ -22,7 +22,7 @@ That's it. Look for the **🎙 in your menu bar**. The first launch downloads th
 ## Using it
 
 - **Hold `fn`, speak, release.** A pill appears at the bottom of your screen ("● Listening…") so you always know when it's recording. Your text pastes into whatever app you're in — usually in under a second.
-- **Double-tap `fn` for hands-free mode** — it keeps recording without holding; tap `fn` once more to finish. Great for long dictations.
+- **Double-tap `fn` for hands-free reading mode** — keeps recording without holding, and streams text into your document *as you go*: each time you pause between sentences, that chunk transcribes and appears. Great for long readings (up to 10 minutes). Tap `fn` once more to finish.
 - **Esc cancels** any recording (there's also *Cancel recording* in the 🎙 menu). Pressing another key while holding `fn` also cancels, so `fn`+arrow shortcuts still work.
 - Say **"new line"** or **"new paragraph"** for line breaks.
 - Your transcript is also left on the clipboard — if a paste ever misses, just Cmd+V.

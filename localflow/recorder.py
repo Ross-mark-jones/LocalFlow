@@ -86,19 +86,59 @@ class Recorder:
             return True
 
     def _on_audio(self, indata: np.ndarray, frames: int, time_info, status) -> None:
-        if self._capturing:
-            self._chunks.append(indata.copy())
+        # Short critical section (a list append) so it can't race the reads in
+        # flush_segment/stop. The callback must stay quick — no heavy work here.
+        with self._lock:
+            if self._capturing:
+                self._chunks.append(indata.copy())
 
     def stop(self) -> np.ndarray:
-        """Stop capturing and return the audio. Never touches the stream, so it
-        cannot block or fail."""
+        """Stop capturing and return whatever audio is still buffered (the
+        un-flushed tail, in streaming mode). Never touches the stream."""
         with self._lock:
             self._capturing = False
+            return self._take_buffer()
+
+    def _take_buffer(self) -> np.ndarray:
+        if not self._chunks:
+            return np.zeros(0, dtype=np.float32)
+        audio = np.concatenate(self._chunks)[:, 0]
+        self._chunks = []
+        return audio
+
+    def flush_segment(
+        self,
+        pause_seconds: float = 0.7,
+        min_speech_seconds: float = 1.0,
+        max_segment_seconds: float = 30.0,
+        silence_threshold: float = 0.01,
+    ) -> "np.ndarray | None":
+        """For streaming/hands-free mode: return a completed speech segment when
+        the speaker pauses (trailing silence >= pause_seconds) or the buffer
+        reaches max_segment_seconds, else None. The returned audio is removed
+        from the buffer so the next segment starts clean. Pausing on natural
+        gaps means cuts land between words, not through them."""
+        with self._lock:
             if not self._chunks:
-                return np.zeros(0, dtype=np.float32)
-            audio = np.concatenate(self._chunks)[:, 0]
+                return None
+            buf = np.concatenate(self._chunks)[:, 0]
+            n = len(buf)
+            if n < int(min_speech_seconds * SAMPLE_RATE):
+                # Not enough yet — but don't let pure silence accumulate forever.
+                if n > int(max_segment_seconds * SAMPLE_RATE) and float(np.abs(buf).max()) < silence_threshold:
+                    self._chunks = []
+                return None
+            pause_n = int(pause_seconds * SAMPLE_RATE)
+            tail = buf[-pause_n:] if n >= pause_n else buf
+            tail_silent = float(np.abs(tail).max()) < silence_threshold
+            over_max = n >= int(max_segment_seconds * SAMPLE_RATE)
+            if not (tail_silent or over_max):
+                return None
+            if float(np.abs(buf).max()) < silence_threshold:
+                self._chunks = []  # all silence — drop it, emit nothing
+                return None
             self._chunks = []
-            return audio
+            return trim_silence(buf)
 
     @property
     def recording(self) -> bool:
